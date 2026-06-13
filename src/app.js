@@ -315,12 +315,13 @@
       body = '<p class="muted small cm-empty">Loading commentary…</p>';
     } else {
       var list = feedMode === "keyEvents" ? (state.feed.keyEvents || []) : (state.feed.commentary || []);
-      var limit = feedMode === "keyEvents" ? 8 : 5;
+      var display = feedMode === "keyEvents" ? list : list.slice(0, 5);
       if (!list.length) {
         body = '<p class="muted small cm-empty">' +
           (feedMode === "keyEvents" ? "No key events yet." : "No commentary yet.") + "</p>";
       } else {
-        body = '<ul class="cm-list">' + list.slice(0, limit).map(function (c) {
+        body = '<ul class="cm-list' + (feedMode === "keyEvents" ? " cm-list--events" : "") + '">' +
+          display.map(function (c) {
           var isGoal = c.scoring || (c.type || "").toLowerCase().indexOf("goal") !== -1;
           return '<li class="cm-item' + (isGoal ? " cm-goal" : "") + '">' +
             '<span class="cm-clock">' + esc(c.clock || "") + "</span>" +
