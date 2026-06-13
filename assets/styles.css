@@ -98,8 +98,11 @@ html, body {
 .ln-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--red-bright); animation: pulse 1.6s infinite; }
 .livenow-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 12px; }
 .live-card {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--navy); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+}
+.live-card-top {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
 }
 .lc-side { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .lc-home { align-items: flex-end; text-align: right; }
@@ -109,9 +112,17 @@ html, body {
 .lc-better { font-size: 14px; font-weight: 700; color: var(--c, #fff); opacity: 0.78; white-space: nowrap; }
 .lc-team { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .lc-home .lc-team { flex-direction: row-reverse; }
-.lc-goals { margin-top: 5px; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.lc-scorers-row {
+  display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start;
+  padding-top: 8px; border-top: 1px solid var(--line);
+}
+.lc-scorers { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.lc-scorers-home { text-align: right; }
+.lc-scorers-away { text-align: left; }
+.lc-scorers-mid { width: 72px; }
 .lc-goal { display: block; white-space: nowrap; }
 .lc-goal::before { content: "⚽"; margin: 0 4px; font-size: 9px; opacity: 0.85; }
+.lc-scorers-home .lc-goal::before { margin: 0 4px 0 0; }
 .lc-mid { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .lc-score { font-size: 28px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lc-score.live { color: var(--red-bright); }
@@ -122,6 +133,16 @@ html, body {
 
 /* ---------- Live commentary / key events feed ---------- */
 .commentary { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.feed-matches {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-bottom: 12px;
+}
+.feed-match {
+  background: var(--navy); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 800;
+  font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap;
+}
+.feed-match:hover { color: var(--ink); }
+.feed-match.active { background: var(--red); color: #fff; border-color: var(--red); }
 .commentary-head {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800;
