@@ -260,6 +260,8 @@ table.leaderboard td.col-team { text-align: left; }
 table.leaderboard td.rank { color: var(--muted); font-weight: 800; }
 table.leaderboard tr.champ-row { background: rgba(255, 210, 63, 0.14); }
 table.leaderboard tr.champ-row td { font-weight: 800; }
+.lb-track { font-weight: 900; color: var(--green); }
+.lb-track-total { font-weight: 700; color: var(--muted); font-size: 0.85em; }
 
 /* ---------- My Teams ---------- */
 .myteams-pick { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -281,6 +283,20 @@ table.leaderboard tr.champ-row td { font-weight: 800; }
 .tc-name { font-weight: 800; font-size: 15px; }
 .team-card .badge { margin-left: auto; }
 .you-won { margin-top: 18px; background: linear-gradient(90deg, var(--gold), #ffb703); color: #2a1a00; font-weight: 900; font-size: 18px; padding: 16px; border-radius: 12px; text-align: center; }
+
+/* My Teams: each category is a vertical column (picks -> upcoming -> history) */
+.myteams-col { display: grid; gap: 16px; align-content: start; }
+/* Match history + upcoming fixtures (reuses .fixtures/.fixture) */
+.mm-round { margin-bottom: 10px; }
+.mm-round:last-child { margin-bottom: 0; }
+.mm-round-label {
+  display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--gold); font-weight: 800; margin-bottom: 2px;
+}
+.myteams-col .fixtures { border-top: none; margin: 0; padding: 2px 0 0; }
+.myteams-col .fixture { background: var(--navy-3); }
+.myteams-col .fixture.is-live { background: rgba(255, 59, 59, 0.1); }
+.fx-mine .fx-line { color: var(--gold); font-weight: 800; }
 
 /* ---------- Badges ---------- */
 .badge { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }

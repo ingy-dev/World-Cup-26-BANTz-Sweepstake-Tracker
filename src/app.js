@@ -87,6 +87,15 @@
   };
   var ROUND_ORDER = { group: 0, r32: 1, r16: 2, qf: 3, sf: 4, third: 5, final: 6 };
 
+  // Order teams within a group: ESPN rank when available, otherwise the usual
+  // football tiebreakers (points -> goal difference -> goals scored).
+  function compareGroupTeams(a, b) {
+    if (a.rank && b.rank && a.rank !== b.rank) return a.rank - b.rank;
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.gd !== a.gd) return b.gd - a.gd;
+    return (b.gf || 0) - (a.gf || 0);
+  }
+
   // ---------------------------------------------------------------------------
   // Analysis
   // ---------------------------------------------------------------------------
@@ -94,7 +103,7 @@
   function rebuildAnalysis() {
     var a = {
       canonicalToEspn: {}, matchesByEspnId: {}, teamState: {},
-      knockoutStarted: false, champion: null,
+      knockoutStarted: false, knockoutDrawn: false, champion: null,
     };
 
     // Map standings teams to canonical ids
@@ -109,9 +118,16 @@
       });
     });
 
-    // Index matches by team & detect knockout start
+    // Index matches by team & detect knockout state.
+    // NOTE: the full schedule includes future knockout *slots* before the draw,
+    // so "knockoutStarted" (any knockout fixture exists) is only used for the
+    // bracket view. Elimination uses "knockoutDrawn" - a knockout match that
+    // actually has two real teams assigned.
     state.matches.forEach(function (m) {
-      if (m.round !== "group") a.knockoutStarted = true;
+      if (m.round !== "group") {
+        a.knockoutStarted = true;
+        if (m.home && m.away && m.home.espnId && m.away.espnId) a.knockoutDrawn = true;
+      }
       [m.home, m.away].forEach(function (c) {
         if (!c || !c.espnId) return;
         (a.matchesByEspnId[c.espnId] = a.matchesByEspnId[c.espnId] || []).push(m);
@@ -144,9 +160,14 @@
           return other && other.winner;
         });
 
+        // A team is eliminated only when it is genuinely knocked out:
+        //  - it lost a completed knockout match, or
+        //  - the knockout draw is set and it didn't make it (finished its
+        //    group and isn't in any knockout match).
+        var groupComplete = !!(standing && standing.played >= 3);
         var eliminated = false;
         if (lostKnockout) eliminated = true;
-        else if (a.knockoutStarted && !inKnockout) eliminated = true;
+        else if (a.knockoutDrawn && groupComplete && !inKnockout) eliminated = true;
 
         // Furthest round the team appears in
         var stage = "group";
@@ -201,14 +222,10 @@
   }
 
   function teamStatusBadge(ts) {
-    if (!ts) return "";
+    if (!ts) return '<span class="badge badge-alive">Still In Play</span>';
     if (ts.champion) return '<span class="badge badge-champ">Champion</span>';
-    if (ts.eliminated) {
-      var where = ts.stage && ts.stage !== "group" ? "Out · " + ROUND_LABEL[ts.stage] : "Eliminated";
-      return '<span class="badge badge-out">' + esc(where) + "</span>";
-    }
-    if (ts.inKnockout) return '<span class="badge badge-alive">In ' + esc(ROUND_LABEL[ts.stage]) + "</span>";
-    return '<span class="badge badge-live">Group stage</span>';
+    if (ts.eliminated) return '<span class="badge badge-out">Eliminated</span>';
+    return '<span class="badge badge-alive">Still In Play</span>';
   }
 
   // ---------------------------------------------------------------------------
@@ -280,13 +297,16 @@
       html += '<table class="standings"><thead><tr>' +
         "<th></th><th class=col-team>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th>" +
         "</tr></thead><tbody>";
-      g.teams.forEach(function (t) {
+      // Sort live so the group leader is always on top.
+      var sortedTeams = g.teams.slice().sort(compareGroupTeams);
+      sortedTeams.forEach(function (t, idx) {
         var canon = canonicalFromEspnName(t.name);
         var owner = ownerForCanonical(canon);
-        var qual = t.rank && t.rank <= 2 ? " qualifying" : "";
+        var position = t.rank || idx + 1;
+        var qual = position <= 2 ? " qualifying" : "";
         html += '<tr class="' + (owner ? "owned" : "") + qual + '"' +
           (owner ? ' style="--c:' + esc(owner.color) + '"' : "") + ">";
-        html += "<td class=rank>" + (t.rank || "") + "</td>";
+        html += "<td class=rank>" + position + "</td>";
         html += '<td class="col-team"><span class="team-cell">' +
           flagImg(canon, t.logo, "flag-sm") +
           '<span class="team-name">' + esc(canon ? canon.name : t.name) + "</span>" +
@@ -405,16 +425,33 @@
   }
 
   function participantSummary(p) {
-    var alive = 0, eliminated = 0, points = 0, best = "group", isChamp = false;
+    var alive = 0, eliminated = 0, played = 0, points = 0, gd = 0, koGd = 0, koGf = 0, best = "group", isChamp = false;
     p.teams.forEach(function (tid) {
       var ts = analysis.teamState[tid];
       if (!ts) return;
       if (ts.champion) isChamp = true;
       if (ts.eliminated) eliminated++; else alive++;
-      if (ts.standing) points += ts.standing.points || 0;
+      if (ts.standing) {
+        played += ts.standing.played || 0;
+        points += ts.standing.points || 0;
+        gd += ts.standing.gd || 0;
+      }
+      // Knockout form: goal difference / goals scored across completed
+      // knockout matches (group games are excluded).
+      if (ts.espnId) {
+        (analysis.matchesByEspnId[ts.espnId] || []).forEach(function (m) {
+          if (m.round === "group" || !m.completed) return;
+          var mine = (m.home && m.home.espnId === ts.espnId) ? m.home : m.away;
+          var opp = (m.home && m.home.espnId === ts.espnId) ? m.away : m.home;
+          if (mine && opp && mine.score != null && opp.score != null) {
+            koGd += mine.score - opp.score;
+            koGf += mine.score;
+          }
+        });
+      }
       if (ROUND_ORDER[ts.stage] > ROUND_ORDER[best]) best = ts.stage;
     });
-    return { alive: alive, eliminated: eliminated, points: points, best: best, isChamp: isChamp };
+    return { alive: alive, eliminated: eliminated, played: played, points: points, gd: gd, koGd: koGd, koGf: koGf, best: best, isChamp: isChamp };
   }
 
   function renderLeaderboard() {
@@ -423,9 +460,17 @@
     });
     rows.sort(function (x, y) {
       if (x.s.isChamp !== y.s.isChamp) return x.s.isChamp ? -1 : 1;
+      // Post-elimination: teams still alive and furthest round reached dominate.
       if (y.s.alive !== x.s.alive) return y.s.alive - x.s.alive;
       if (ROUND_ORDER[y.s.best] !== ROUND_ORDER[x.s.best]) return ROUND_ORDER[y.s.best] - ROUND_ORDER[x.s.best];
-      return y.s.points - x.s.points;
+      // Knockout form: how convincingly their teams are winning in the
+      // knockouts (zero during the group stage, so groups fall through below).
+      if (y.s.koGd !== x.s.koGd) return y.s.koGd - x.s.koGd;
+      if (y.s.koGf !== x.s.koGf) return y.s.koGf - x.s.koGf;
+      // Group-stage differentiator: points, then goal difference - so winning
+      // teams push you up the board.
+      if (y.s.points !== x.s.points) return y.s.points - x.s.points;
+      return y.s.gd - x.s.gd;
     });
 
     var champ = analysis.champion;
@@ -436,7 +481,7 @@
     html += '<div class="pots">';
     html += potCard(SWEEP.titles.main, fmtMoney(SWEEP.payouts.main),
       mainWinner ? mainWinner.name : (rows[0] ? rows[0].p.name + " (leading)" : "TBD"),
-      mainWinner ? "Champion: " + (champ.canon ? champ.canon.name : "") : "Most teams still standing",
+      mainWinner ? "Champion: " + (champ.canon ? champ.canon.name : "") : "Leading on teams remaining, then points, then GD",
       !!mainWinner);
     html += potCard(SWEEP.titles.side, fmtMoney(SWEEP.payouts.side),
       sideWinner ? sideWinner : (rows[0] ? participantBetter(rows[0].p) + " (leading)" : "TBD"),
@@ -444,17 +489,28 @@
       !!sideWinner);
     html += "</div>";
 
+    // Show the knockout-form column only once knockout matches are under way.
+    var koStarted = state.matches.some(function (m) { return m.round !== "group" && m.completed; });
+
     html += '<table class="leaderboard"><thead><tr>' +
-      "<th>#</th><th class=col-team>Player</th><th>Teams in</th><th>Out</th><th>Furthest</th><th>Pts</th><th class=col-team>Sweepception better</th>" +
+      "<th>#</th><th class=col-team>Player</th>" +
+      '<th title="Total matches played by this player\'s teams">MP</th>' +
+      "<th>Pts</th><th>GD</th>" +
+      '<th title="Teams still in the tournament">Alive</th>' +
+      "<th>Furthest</th>" +
+      (koStarted ? '<th title="Goal difference across knockout matches">KO GD</th>' : "") +
+      "<th class=col-team>Sweepception better</th>" +
       "</tr></thead><tbody>";
     rows.forEach(function (r, i) {
       html += '<tr style="--c:' + esc(r.p.color) + '"' + (r.s.isChamp ? ' class="champ-row"' : "") + ">";
       html += "<td class=rank>" + (i + 1) + "</td>";
       html += '<td class="col-team"><span class="owner-chip" style="--c:' + esc(r.p.color) + '"><span class="owner-dot"></span>' + esc(r.p.name) + (r.s.isChamp ? " 🏆" : "") + "</span></td>";
-      html += '<td class="num strong">' + r.s.alive + "</td>";
-      html += '<td class="num muted">' + r.s.eliminated + "</td>";
+      html += '<td class="num muted">' + r.s.played + "</td>";
+      html += '<td class="num strong">' + r.s.points + "</td>";
+      html += '<td class="num muted">' + (r.s.gd > 0 ? "+" + r.s.gd : r.s.gd) + "</td>";
+      html += '<td class="num"><span class="lb-track">' + r.s.alive + '<span class="lb-track-total">/' + r.p.teams.length + "</span></span></td>";
       html += "<td>" + esc(ROUND_LABEL[r.s.best]) + "</td>";
-      html += '<td class="num">' + r.s.points + "</td>";
+      if (koStarted) html += '<td class="num strong">' + (r.s.koGd > 0 ? "+" + r.s.koGd : r.s.koGd) + "</td>";
       html += "<td class=col-team>" + esc(r.p.better) + "</td>";
       html += "</tr>";
     });
@@ -491,8 +547,12 @@
     var asPlayer = SWEEP.participants.filter(function (p) { return normalize(p.name) === key; })[0] || null;
     var betOn = participantByBetter[key] || null;
 
+    // Two columns, each self-contained: team picks on top, then that
+    // category's upcoming fixtures, then its match history. Left = the original
+    // sweepstake (their own picks), right = the Sweepception (their draw).
     html += '<div class="myteams-sections">';
 
+    html += '<div class="myteams-col">';
     html += '<section class="myteams-block"><h3>Your picks <span class="muted">(' + SWEEP.titles.main + ")</span></h3>";
     if (asPlayer) {
       html += teamCardList(asPlayer.teams, asPlayer);
@@ -500,7 +560,10 @@
       html += '<p class="muted">You\'re not a player in the main sweep.</p>';
     }
     html += "</section>";
+    if (asPlayer) html += myMatchesBlocks(asPlayer.teams);
+    html += "</div>";
 
+    html += '<div class="myteams-col">';
     html += '<section class="myteams-block"><h3>Your Sweepception ';
     if (betOn) {
       html += '<span class="muted">(you drew ' + esc(betOn.name) + ")</span></h3>";
@@ -509,6 +572,9 @@
       html += '<span class="muted">(side bet)</span></h3><p class="muted">You weren\'t assigned a player in the Sweepception.</p>';
     }
     html += "</section>";
+    if (betOn) html += myMatchesBlocks(betOn.teams);
+    html += "</div>";
+
     html += "</div>";
 
     // Personal payout watch
@@ -541,6 +607,85 @@
     });
     html += "</ul>";
     return html;
+  }
+
+  // Upcoming + match-history blocks for one category of teams (either the
+  // person's own sweepstake picks or their Sweepception draw). Reuses the
+  // group-stage fixture layout and shows the owner (username + Sweepception
+  // better) of whoever their teams are up against. Matches are grouped by round,
+  // so this automatically rolls from the group stage into the knockouts as the
+  // schedule fills in.
+  function myMatchesBlocks(teamIds) {
+    var mineSet = {};
+    teamIds.forEach(function (tid) {
+      var ts = analysis.teamState[tid];
+      if (ts && ts.espnId) mineSet[ts.espnId] = true;
+    });
+
+    var byId = {};
+    Object.keys(mineSet).forEach(function (espnId) {
+      (analysis.matchesByEspnId[espnId] || []).forEach(function (m) {
+        if (m.home && m.away) byId[m.id] = m;
+      });
+    });
+    var all = Object.keys(byId).map(function (k) { return byId[k]; });
+    var history = all.filter(function (m) { return m.completed || m.state === "in" || m.state === "post"; });
+    var upcoming = all.filter(function (m) { return m.state === "pre"; });
+    history.sort(function (a, b) { return new Date(b.dateISO) - new Date(a.dateISO); });
+    upcoming.sort(function (a, b) { return new Date(a.dateISO) - new Date(b.dateISO); });
+
+    var roundsAsc = ["group", "r32", "r16", "qf", "sf", "third", "final"];
+
+    function block(heading, list, empty, asc) {
+      var inner = "";
+      if (!list.length) {
+        inner = '<p class="muted small">' + esc(empty) + "</p>";
+      } else {
+        var order = asc ? roundsAsc : roundsAsc.slice().reverse();
+        order.forEach(function (r) {
+          var rows = list.filter(function (m) { return m.round === r; });
+          if (!rows.length) return;
+          inner += '<div class="mm-round"><span class="mm-round-label">' + esc(ROUND_LABEL[r]) + "</span>";
+          inner += '<ul class="fixtures">';
+          rows.forEach(function (m) { inner += myMatchRow(m, mineSet); });
+          inner += "</ul></div>";
+        });
+      }
+      return '<section class="myteams-block"><h3>' + esc(heading) + "</h3>" + inner + "</section>";
+    }
+
+    return block("Upcoming matches", upcoming, "No upcoming fixtures right now — check back once the next round is drawn.", true) +
+      block("Match history", history, "None of these teams have kicked off yet.", false);
+  }
+
+  // A single fixture row from the perspective of a person's team(s). Identical
+  // layout to the group-stage fixtures, but highlights the team(s) they own.
+  function myMatchRow(m, mineSet) {
+    var hc = canonicalFromEspnName(m.home.name);
+    var ac = canonicalFromEspnName(m.away.name);
+    var ho = ownerForCanonical(hc);
+    var ao = ownerForCanonical(ac);
+    var live = m.state === "in";
+    var homeMine = m.home.espnId && mineSet[m.home.espnId];
+    var awayMine = m.away.espnId && mineSet[m.away.espnId];
+    var score = m.state === "pre"
+      ? '<span class="fx-time">' + esc(shortDate(m.dateISO)) + "</span>"
+      : '<span class="fx-score' + (live ? " live" : "") + '">' + (m.home.score == null ? "-" : m.home.score) +
+        "<span class=fx-dash>–</span>" + (m.away.score == null ? "-" : m.away.score) + "</span>";
+    return '<li class="fixture' + (live ? " is-live" : "") + '">' +
+      '<span class="fx-team fx-home' + (homeMine ? " fx-mine" : "") + '">' +
+        '<span class="fx-line">' + esc(hc ? hc.name : m.home.name) + flagImg(hc, m.home.logo, "flag-xs") + "</span>" +
+        ownerLabel(ho, "right") +
+      "</span>" +
+      '<span class="fx-mid">' + score +
+        (live ? '<span class="fx-status live">' + esc(m.statusShort) + "</span>"
+              : m.completed ? '<span class="fx-status">FT</span>' : "") +
+      "</span>" +
+      '<span class="fx-team fx-away' + (awayMine ? " fx-mine" : "") + '">' +
+        '<span class="fx-line">' + flagImg(ac, m.away.logo, "flag-xs") + esc(ac ? ac.name : m.away.name) + "</span>" +
+        ownerLabel(ao, "left") +
+      "</span>" +
+      "</li>";
   }
 
   // ---------------------------------------------------------------------------
