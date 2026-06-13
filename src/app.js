@@ -70,6 +70,8 @@
     loading: true,
     error: "",
     lastUpdated: null,
+    feed: { eventId: null, commentary: [], keyEvents: [] }, // live feed for featured match
+    feedMode: localStorage.getItem("wc26.feed") || "commentary", // "commentary" | "keyEvents"
   };
 
   // Derived analysis (rebuilt whenever data changes)
@@ -248,10 +250,70 @@
       mode = "next"; list = [upcoming[0]]; title = "Up Next";
     }
     var cards = list.map(function (m) { return liveCard(m, mode); }).join("");
+    var feed = mode === "live" ? renderMatchFeed(live[0]) : "";
     return '<section class="livenow' + (mode === "live" ? " is-live" : "") + '">' +
       '<div class="livenow-head">' + (mode === "live" ? '<span class="ln-dot"></span>' : "") +
       "<h2>" + esc(title) + "</h2></div>" +
-      '<div class="livenow-cards">' + cards + "</div></section>";
+      '<div class="livenow-cards">' + cards + "</div>" + feed + "</section>";
+  }
+
+  // Icon for a feed line, based on ESPN's play/event type (and text fallback).
+  function commentaryIcon(type, text) {
+    var t = ((type || "") + " " + (text || "")).toLowerCase();
+    if (t.indexOf("goal") !== -1) return "⚽";
+    if (t.indexOf("penalt") !== -1) return "🎯";
+    if (t.indexOf("yellow") !== -1) return "🟨";
+    if (t.indexOf("red card") !== -1 || t.indexOf("red-card") !== -1) return "🟥";
+    if (t.indexOf("substitut") !== -1 || t.indexOf("sub") !== -1) return "🔁";
+    if (t.indexOf("extra") !== -1) return "⏱️";
+    if (t.indexOf("full-time") !== -1 || t.indexOf("fulltime") !== -1 ||
+        t.indexOf("match end") !== -1 || t.indexOf("ends") !== -1) return "🏁";
+    if (t.indexOf("half-time") !== -1 || t.indexOf("halftime") !== -1) return "⏸️";
+    if (t.indexOf("kick off") !== -1 || t.indexOf("kickoff") !== -1 || t.indexOf("begins") !== -1) return "▶️";
+    if (t.indexOf("shootout") !== -1) return "🎯";
+    if (t.indexOf("corner") !== -1) return "🚩";
+    return "•";
+  }
+
+  // Live feed for the featured match with a Commentary / Key events toggle.
+  // Only renders when state.feed matches that match.
+  function renderMatchFeed(m) {
+    if (!m || !state.feed || state.feed.eventId !== m.id) return "";
+    var commentary = state.feed.commentary || [];
+    var keyEvents = state.feed.keyEvents || [];
+    if (!commentary.length && !keyEvents.length) return "";
+
+    var feedMode = state.feedMode === "keyEvents" ? "keyEvents" : "commentary";
+    var list = feedMode === "keyEvents" ? keyEvents : commentary;
+    var limit = feedMode === "keyEvents" ? 8 : 5;
+
+    var hc = canonicalFromEspnName(m.home.name);
+    var ac = canonicalFromEspnName(m.away.name);
+    var heading = esc((hc ? hc.name : m.home.name)) + " v " + esc(ac ? ac.name : m.away.name);
+
+    var toggle = '<div class="cm-toggle">' +
+      '<button class="cm-tab' + (feedMode === "commentary" ? " active" : "") + '" data-feed="commentary">Commentary</button>' +
+      '<button class="cm-tab' + (feedMode === "keyEvents" ? " active" : "") + '" data-feed="keyEvents">Key events</button>' +
+      "</div>";
+
+    var body;
+    if (!list.length) {
+      body = '<p class="muted small cm-empty">' +
+        (feedMode === "keyEvents" ? "No key events yet." : "No commentary yet.") + "</p>";
+    } else {
+      body = '<ul class="cm-list">' + list.slice(0, limit).map(function (c) {
+        var isGoal = c.scoring || (c.type || "").toLowerCase().indexOf("goal") !== -1;
+        return '<li class="cm-item' + (isGoal ? " cm-goal" : "") + '">' +
+          '<span class="cm-clock">' + esc(c.clock || "") + "</span>" +
+          '<span class="cm-icon">' + commentaryIcon(c.type, c.text) + "</span>" +
+          '<span class="cm-text">' + esc(c.text) + "</span>" +
+          "</li>";
+      }).join("") + "</ul>";
+    }
+
+    return '<div class="commentary">' +
+      '<div class="commentary-head"><span class="cm-title">' + heading + "</span>" + toggle + "</div>" +
+      body + "</div>";
   }
 
   function liveCard(m, mode) {
@@ -274,10 +336,17 @@
     var ownerHtml = owner
       ? '<span class="lc-player">' + esc(owner.name) + "</span><span class=\"lc-better\">" + esc(owner.better) + "</span>"
       : '<span class="lc-player">—</span>';
+    var goals = (c.goals || []).map(function (g) {
+      var suffix = g.og ? " (OG)" : (g.pen ? " (P)" : "");
+      return '<span class="lc-goal">' + esc(g.name) +
+        (g.clock ? " " + esc(g.clock) : "") + suffix + "</span>";
+    }).join("");
+    var goalsHtml = goals ? '<div class="lc-goals">' + goals + "</div>" : "";
     return '<div class="lc-side lc-' + side + '" style="--c:' + esc(color) + '">' +
       '<div class="lc-owner">' + ownerHtml + "</div>" +
       '<div class="lc-team">' + flagImg(canon, c.logo, "flag-sm") +
       "<span>" + esc(canon ? canon.name : c.name) + "</span></div>" +
+      goalsHtml +
       "</div>";
   }
 
@@ -761,6 +830,13 @@
     });
     var refresh = document.getElementById("refresh-btn");
     if (refresh) refresh.addEventListener("click", function () { loadAll(true); });
+    Array.prototype.forEach.call(document.querySelectorAll(".cm-tab"), function (btn) {
+      btn.addEventListener("click", function () {
+        state.feedMode = btn.getAttribute("data-feed");
+        localStorage.setItem("wc26.feed", state.feedMode);
+        render();
+      });
+    });
     var sel = document.getElementById("person-select");
     if (sel) sel.addEventListener("change", function () {
       state.person = sel.value;
@@ -795,6 +871,30 @@
     });
   }
 
+  // Featured live match = the first one currently in play (matches renderLiveNow).
+  function featuredLiveMatch() {
+    return state.matches.filter(function (m) {
+      return m.state === "in" && m.home && m.away;
+    })[0] || null;
+  }
+
+  // Pull the live feed (commentary + key events) for the featured live match;
+  // clear it when nothing is live.
+  function refreshFeed() {
+    var m = featuredLiveMatch();
+    if (!m) {
+      if (state.feed.eventId || state.feed.commentary.length || state.feed.keyEvents.length) {
+        state.feed = { eventId: null, commentary: [], keyEvents: [] };
+        render();
+      }
+      return;
+    }
+    espn.fetchMatchFeed(m.id).then(function (feed) {
+      state.feed = { eventId: m.id, commentary: feed.commentary, keyEvents: feed.keyEvents };
+      render();
+    });
+  }
+
   function loadAll(force) {
     state.error = "";
     if (force) { state.loading = true; render(); }
@@ -806,6 +906,7 @@
         state.lastUpdated = Date.now();
         rebuildAnalysis();
         render();
+        refreshFeed();
       })
       .catch(function (err) {
         state.loading = false;
@@ -823,6 +924,7 @@
         state.error = "";
         rebuildAnalysis();
         render();
+        refreshFeed();
       })
       .catch(function () { /* keep showing last good data */ });
   }

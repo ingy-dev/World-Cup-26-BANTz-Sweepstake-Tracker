@@ -16,6 +16,7 @@
   var BASE = "https://site.api.espn.com/apis";
   var STANDINGS_URL = BASE + "/v2/sports/soccer/fifa.world/standings?season=2026";
   var SCOREBOARD_URL = BASE + "/site/v2/sports/soccer/fifa.world/scoreboard?dates=";
+  var SUMMARY_URL = BASE + "/site/v2/sports/soccer/fifa.world/summary?event=";
   var CACHE_PREFIX = "wc26.day.";
 
   // --- helpers ---------------------------------------------------------------
@@ -93,12 +94,33 @@
     };
   }
 
+  // Goalscorers for one team, pulled from the scoreboard's scoring details.
+  function goalsForTeam(details, espnId) {
+    if (!espnId) return [];
+    return (details || [])
+      .filter(function (d) {
+        return d.scoringPlay && !d.shootout && d.team && String(d.team.id) === String(espnId);
+      })
+      .map(function (d) {
+        var a = (d.athletesInvolved && d.athletesInvolved[0]) || {};
+        return {
+          name: a.shortName || a.displayName || "",
+          clock: (d.clock && d.clock.displayValue) || "",
+          pen: !!d.penaltyKick,
+          og: !!d.ownGoal,
+        };
+      });
+  }
+
   function parseEvent(ev, dateKey) {
     var comp = (ev.competitions && ev.competitions[0]) || {};
     var status = (comp.status || ev.status || {}).type || {};
     var competitors = (comp.competitors || []).map(parseCompetitor);
     var home = competitors.filter(function (c) { return c.homeAway === "home"; })[0] || competitors[0];
     var away = competitors.filter(function (c) { return c.homeAway === "away"; })[0] || competitors[1];
+    var details = comp.details || [];
+    if (home) home.goals = goalsForTeam(details, home.espnId);
+    if (away) away.goals = goalsForTeam(details, away.espnId);
     return {
       id: ev.id,
       dateISO: ev.date,
@@ -210,11 +232,66 @@
     return fetchDay(todayKey());
   }
 
+  // Which key events to surface: goals, penalties, subs, cards, period markers
+  // (kick off / half / full time / extra time), shootouts. Explicitly drops
+  // ESPN's VAR "start-delay"/"end-delay" noise and free kicks.
+  var KEY_EVENT_ALLOW = [
+    "goal", "penalt", "substitut", "yellow", "red-card", "red card",
+    "kickoff", "kick off", "full-time", "fulltime", "half-time", "halftime",
+    "extra", "shootout", "match end", "end of", "begins", "ends",
+  ];
+  function isKeyEvent(type, text) {
+    var s = ((type || "") + " " + (text || "")).toLowerCase();
+    if (s.indexOf("delay") !== -1) return false;            // VAR delays
+    if (s.indexOf("free") !== -1 && s.indexOf("kick") !== -1) return false; // free kicks
+    return KEY_EVENT_ALLOW.some(function (k) { return s.indexOf(k) !== -1; });
+  }
+
+  // Live feed for a single match (never cached). One summary request yields
+  // both the full play-by-play commentary and the curated key events
+  // (goals/cards/subs), each returned newest-first.
+  function fetchMatchFeed(eventId) {
+    if (!eventId) return Promise.resolve({ commentary: [], keyEvents: [] });
+    return getJSON(SUMMARY_URL + eventId)
+      .then(function (data) {
+        var commentary = ((data && data.commentary) || [])
+          .map(function (c) {
+            var play = c.play || {};
+            return {
+              sequence: c.sequence || 0,
+              clock: (c.time && c.time.displayValue) || "",
+              text: c.text || "",
+              type: (play.type && (play.type.type || play.type.text)) || "",
+            };
+          })
+          .filter(function (c) { return c.text; })
+          .sort(function (a, b) { return b.sequence - a.sequence; });
+
+        var keyEvents = ((data && data.keyEvents) || [])
+          .map(function (e) {
+            var type = e.type || {};
+            return {
+              clock: (e.clock && e.clock.displayValue) || "",
+              text: e.text || e.shortText || type.text || "",
+              type: type.type || type.text || "",
+              scoring: !!e.scoringPlay,
+              wallclock: e.wallclock || "",
+            };
+          })
+          .filter(function (e) { return e.text && isKeyEvent(e.type, e.text); })
+          .sort(function (a, b) { return (b.wallclock || "").localeCompare(a.wallclock || ""); });
+
+        return { commentary: commentary, keyEvents: keyEvents };
+      })
+      .catch(function () { return { commentary: [], keyEvents: [] }; });
+  }
+
   window.WC.espn = {
     normalize: normalize,
     fetchStandings: fetchStandings,
     fetchAllMatches: fetchAllMatches,
     fetchTodayMatches: fetchTodayMatches,
+    fetchMatchFeed: fetchMatchFeed,
     tournamentDates: tournamentDates,
   };
 })();
