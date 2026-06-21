@@ -164,12 +164,22 @@
         });
 
         // A team is eliminated only when it is genuinely knocked out:
-        //  - it lost a completed knockout match, or
+        //  - it lost a completed knockout match,
+        //  - it is mathematically out of the group already, or
         //  - the knockout draw is set and it didn't make it (finished its
         //    group and isn't in any knockout match).
+        //
+        // ESPN's "Eliminated" note is positional (it labels the bottom team in
+        // every group, even after one game), so on its own it over-counts. We
+        // only trust it once the team can no longer recover: it has played 2+
+        // games and taken 0 points, i.e. lost every match and can't catch the
+        // top two of its group.
         var groupComplete = !!(standing && standing.played >= 3);
+        var espnEliminated = !!(standing && /eliminat/i.test(standing.advanceText || ""));
+        var noPointsOut = !!(standing && standing.played >= 2 && standing.points === 0);
         var eliminated = false;
         if (lostKnockout) eliminated = true;
+        else if (espnEliminated && noPointsOut) eliminated = true;
         else if (a.knockoutDrawn && groupComplete && !inKnockout) eliminated = true;
 
         // Furthest round the team appears in
